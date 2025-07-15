@@ -145,7 +145,6 @@ ehthumbs.db
 Thumbs.db
 
 # Resultados temporales
-resultados_*.csv
 temp_*
 *.tmp
 
