@@ -1,7 +1,7 @@
 # 📋 PLAN DE CORTE EJECUTABLE - CARTILLA DE ACERO
 
 **Generado por OICA (Optimizador Inteligente de Cortes de Acero)**  
-**Fecha de generación:** 2025-06-07 11:28:33  
+**Fecha de generación:** 2025-07-30 11:26:18  
 **Eficiencia global alcanzada:** 89.24%  
 **Total de piezas a cortar:** 683 piezas  
 **Total de barras a utilizar:** 88 barras  
