@@ -10,7 +10,10 @@ import traceback
 import threading
 import time
 import os
+import json
+import pandas as pd
 from datetime import datetime
+from werkzeug.utils import secure_filename
 
 # Importar la función main del módulo principal
 try:
@@ -22,6 +25,14 @@ except ImportError as e:
 # Configuración de la aplicación Flask
 app = Flask(__name__)
 CORS(app)  # Habilitar CORS para todas las rutas
+
+# Configuración de archivos
+UPLOAD_PATH = os.environ.get('UPLOAD_PATH', '/usr/src/app/data/filestore')
+ACCEPTED_FORMATS = os.environ.get('ACCEPTED_FORMATS', 'xlsx').split(',')
+MAX_CONTENT_LENGTH = 16 * 1024 * 1024  # 16MB max file size
+
+# Crear directorio de archivos si no existe
+os.makedirs(UPLOAD_PATH, exist_ok=True)
 
 # Configuración de logging
 logging.basicConfig(
@@ -58,6 +69,122 @@ def get_status():
         "historial_procesamiento": len(historial_procesamiento),
         "timestamp": datetime.now().isoformat()
     }), 200
+
+@app.route('/files', methods=['GET'])
+def list_files():
+    """
+    Endpoint para listar archivos disponibles en el filestore
+    """
+    try:
+        if not os.path.exists(UPLOAD_PATH):
+            return jsonify({
+                "files": [],
+                "message": "Directorio de archivos no existe",
+                "timestamp": datetime.now().isoformat()
+            }), 200
+        
+        files = []
+        for filename in os.listdir(UPLOAD_PATH):
+            if any(filename.lower().endswith(f'.{ext}') for ext in ACCEPTED_FORMATS):
+                file_path = os.path.join(UPLOAD_PATH, filename)
+                file_stats = os.stat(file_path)
+                files.append({
+                    "name": filename,
+                    "size": file_stats.st_size,
+                    "modified": datetime.fromtimestamp(file_stats.st_mtime).isoformat()
+                })
+        
+        files.sort(key=lambda x: x['modified'], reverse=True)
+        
+        return jsonify({
+            "files": files,
+            "total": len(files),
+            "accepted_formats": ACCEPTED_FORMATS,
+            "timestamp": datetime.now().isoformat()
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error listando archivos: {str(e)}")
+        return jsonify({
+            "error": "Error listando archivos",
+            "message": str(e),
+            "timestamp": datetime.now().isoformat()
+        }), 500
+
+@app.route('/upload', methods=['POST'])
+def upload_file():
+    """
+    Endpoint para subir archivos al filestore local
+    """
+    try:
+        if 'file' not in request.files:
+            return jsonify({
+                "error": "No se encontró archivo",
+                "message": "Debe incluir un archivo en el campo 'file'",
+                "timestamp": datetime.now().isoformat()
+            }), 400
+        
+        file = request.files['file']
+        
+        if file.filename == '':
+            return jsonify({
+                "error": "Nombre de archivo vacío",
+                "message": "El archivo debe tener un nombre válido",
+                "timestamp": datetime.now().isoformat()
+            }), 400
+        
+        # Validar extensión del archivo
+        file_ext = file.filename.rsplit('.', 1)[1].lower() if '.' in file.filename else ''
+        if file_ext not in ACCEPTED_FORMATS:
+            return jsonify({
+                "error": "Formato de archivo no válido",
+                "message": f"Solo se aceptan archivos: {', '.join(ACCEPTED_FORMATS)}",
+                "accepted_formats": ACCEPTED_FORMATS,
+                "timestamp": datetime.now().isoformat()
+            }), 400
+        
+        # Obtener nombre alternativo del form data (opcional)
+        alternative_name = request.form.get('alternativeName', '')
+        
+        # Si no se proporciona nombre alternativo, usar el nombre original del archivo
+        if alternative_name:
+            filename = alternative_name
+            # Asegurar que tenga la extensión correcta
+            if not filename.lower().endswith(f'.{file_ext}'):
+                filename = f"{filename}.{file_ext}"
+        else:
+            filename = file.filename
+        filename = secure_filename(filename)
+        file_path = os.path.join(UPLOAD_PATH, filename)
+        
+        # Guardar archivo
+        file.save(file_path)
+        
+        # Obtener información del archivo guardado
+        file_stats = os.stat(file_path)
+        
+        logger.info(f"Archivo subido exitosamente: {filename}")
+        
+        return jsonify({
+            "status": "success",
+            "message": "Archivo subido exitosamente",
+            "file": {
+                "name": filename,
+                "original_name": file.filename,
+                "size": file_stats.st_size,
+                "path": file_path,
+                "alternative_name": alternative_name if alternative_name else None
+            },
+            "timestamp": datetime.now().isoformat()
+        }), 201
+        
+    except Exception as e:
+        logger.error(f"Error subiendo archivo: {str(e)}")
+        return jsonify({
+            "error": "Error subiendo archivo",
+            "message": str(e),
+            "timestamp": datetime.now().isoformat()
+        }), 500
 
 @app.route('/start-oica', methods=['POST'])
 def start_oica():
