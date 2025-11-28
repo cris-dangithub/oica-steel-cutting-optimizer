@@ -24,7 +24,8 @@ def ejecutar_algoritmo_genetico(
     piezas_requeridas_df: pd.DataFrame,
     barras_estandar_disponibles: List[Dict[str, Any]],
     desperdicios_reutilizables_previos: List[Dict[str, Any]],
-    config_ga: Optional[Dict[str, Any]] = None
+    config_ga: Optional[Dict[str, Any]] = None,
+    progress_callback: Optional[callable] = None
 ) -> Tuple[Cromosoma, Dict[str, Any]]:
     """
     Ejecuta el algoritmo genético completo para optimizar el corte de acero.
@@ -34,6 +35,8 @@ def ejecutar_algoritmo_genetico(
         barras_estandar_disponibles: Lista de barras estándar disponibles.
         desperdicios_reutilizables_previos: Lista de desperdicios reutilizables.
         config_ga: Configuración del algoritmo genético.
+        progress_callback: Función opcional para reportar progreso.
+                          Llamada con (generacion_actual, max_generaciones, mejor_fitness).
     
     Returns:
         Tuple[Cromosoma, Dict]: Mejor cromosoma encontrado y estadísticas de evolución.
@@ -57,21 +60,140 @@ def ejecutar_algoritmo_genetico(
               f"{config_ga['max_generaciones']} generaciones máx.")
     
     try:
-        # Paso 1: Inicializar población
-        poblacion = inicializar_poblacion(
-            tamaño_poblacion=config_ga['tamaño_poblacion'],
-            piezas_requeridas_df=piezas_requeridas_df,
-            barras_estandar_disponibles=barras_estandar_disponibles,
-            desperdicios_reutilizables_previos=desperdicios_reutilizables_previos,
-            estrategia_inicializacion=config_ga['estrategia_inicializacion'],
-            config_ga=config_ga
+        # Paso 1: Inicializar población CON CALLBACKS
+        poblacion = []
+        tamaño_poblacion = config_ga['tamaño_poblacion']
+        
+        # Importar funciones de inicialización
+        from .population import (
+            generar_individuo_con_analisis_optimo,
+            generar_individuo_heuristico_ffd,
+            generar_individuo_heuristico_bfd,
+            generar_individuo_aleatorio_con_reparacion
         )
         
-        # Paso 2: Evaluar población inicial
+        estrategia = config_ga['estrategia_inicializacion']
+        proporcion_heuristicos = config_ga.get('proporcion_heuristicos', 0.6)
+        
+        # Determinar cuántos de cada tipo según estrategia
+        if estrategia == 'heuristica':
+            num_optimos = 0
+            num_heuristicos = tamaño_poblacion
+            num_aleatorios = 0
+        elif estrategia == 'aleatoria':
+            num_optimos = 0
+            num_heuristicos = 0
+            num_aleatorios = tamaño_poblacion
+        else:  # hibrida
+            num_optimos = min(tamaño_poblacion // 4, 3)
+            num_heuristicos = int((tamaño_poblacion - num_optimos) * proporcion_heuristicos)
+            num_aleatorios = tamaño_poblacion - num_optimos - num_heuristicos
+        
+        total_generados = 0
+        
+        # Generar individuos óptimos
+        for _ in range(num_optimos):
+            individuo = generar_individuo_con_analisis_optimo(
+                piezas_requeridas_df,
+                barras_estandar_disponibles,
+                desperdicios_reutilizables_previos
+            )
+            poblacion.append(individuo)
+            total_generados += 1
+            
+            # Callback cada 20% o cada 10 individuos
+            if total_generados % max(1, tamaño_poblacion // 5) == 0:
+                if progress_callback:
+                    progress_callback(
+                        0, config_ga['max_generaciones'],
+                        operation='init_population',
+                        current=total_generados,
+                        total=tamaño_poblacion
+                    )
+        
+        # Generar individuos heurísticos
+        for i in range(num_heuristicos):
+            if i % 2 == 0:
+                individuo = generar_individuo_heuristico_ffd(
+                    piezas_requeridas_df,
+                    barras_estandar_disponibles,
+                    desperdicios_reutilizables_previos
+                )
+            else:
+                individuo = generar_individuo_heuristico_bfd(
+                    piezas_requeridas_df,
+                    barras_estandar_disponibles,
+                    desperdicios_reutilizables_previos
+                )
+            poblacion.append(individuo)
+            total_generados += 1
+            
+            # Callback cada 20%
+            if total_generados % max(1, tamaño_poblacion // 5) == 0:
+                if progress_callback:
+                    progress_callback(
+                        0, config_ga['max_generaciones'],
+                        operation='init_population',
+                        current=total_generados,
+                        total=tamaño_poblacion
+                    )
+        
+        # Generar individuos aleatorios
+        for _ in range(num_aleatorios):
+            individuo = generar_individuo_aleatorio_con_reparacion(
+                piezas_requeridas_df,
+                barras_estandar_disponibles,
+                desperdicios_reutilizables_previos
+            )
+            poblacion.append(individuo)
+            total_generados += 1
+            
+            # Callback cada 20%
+            if total_generados % max(1, tamaño_poblacion // 5) == 0:
+                if progress_callback:
+                    progress_callback(
+                        0, config_ga['max_generaciones'],
+                        operation='init_population',
+                        current=total_generados,
+                        total=tamaño_poblacion
+                    )
+        
+        # Callback final de inicialización
+        if progress_callback:
+            progress_callback(
+                0, config_ga['max_generaciones'],
+                operation='init_population',
+                current=tamaño_poblacion,
+                total=tamaño_poblacion
+            )
+        
+        # Mezclar población
+        random.shuffle(poblacion)
+        
+        # Paso 2: Evaluar población inicial CON CALLBACKS
         valores_fitness = []
-        for cromosoma in poblacion:
+        for idx, cromosoma in enumerate(poblacion, start=1):
             fitness = calcular_fitness(cromosoma, piezas_requeridas_df)
             valores_fitness.append(fitness)
+            
+            # Callback cada 20% de evaluaciones
+            if idx % max(1, len(poblacion) // 5) == 0:
+                if progress_callback:
+                    progress_callback(
+                        0, config_ga['max_generaciones'],
+                        operation='eval_initial',
+                        current=idx,
+                        total=len(poblacion)
+                    )
+        
+        # Callback final de evaluación inicial
+        if progress_callback:
+            progress_callback(
+                0, config_ga['max_generaciones'],
+                operation='eval_initial',
+                current=len(poblacion),
+                total=len(poblacion)
+            )
         
         # Registrar generación inicial
         registro.registrar_generacion(0, poblacion, valores_fitness, 0.0)
@@ -108,6 +230,15 @@ def ejecutar_algoritmo_genetico(
                 tamaño_torneo=config_ga['tamaño_torneo']
             )
             
+            # Callback: Selección completa
+            if progress_callback:
+                mejor_fitness_actual = max(valores_fitness) if valores_fitness else 0.0
+                progress_callback(
+                    generacion, config_ga['max_generaciones'],
+                    best_fitness=mejor_fitness_actual,
+                    operation='selection'
+                )
+            
             # Paso 3.2: Formar parejas y aplicar cruce
             hijos = []
             if len(padres) >= 2:
@@ -142,6 +273,15 @@ def ejecutar_algoritmo_genetico(
                 while len(hijos) < num_padres:
                     hijos.append(random.choice(padres).clonar())
             
+            # Callback: Cruce completo
+            if progress_callback:
+                mejor_fitness_actual = max(valores_fitness) if valores_fitness else 0.0
+                progress_callback(
+                    generacion, config_ga['max_generaciones'],
+                    best_fitness=mejor_fitness_actual,
+                    operation='crossover'
+                )
+            
             # Paso 3.3: Aplicar mutación
             hijos_mutados = []
             for hijo in hijos:
@@ -156,11 +296,29 @@ def ejecutar_algoritmo_genetico(
                 )
                 hijos_mutados.append(hijo_mutado)
             
+            # Callback: Mutación completa
+            if progress_callback:
+                mejor_fitness_actual = max(valores_fitness) if valores_fitness else 0.0
+                progress_callback(
+                    generacion, config_ga['max_generaciones'],
+                    best_fitness=mejor_fitness_actual,
+                    operation='mutation'
+                )
+            
             # Paso 3.4: Evaluar nueva generación
             valores_fitness_hijos = []
             for hijo in hijos_mutados:
                 fitness = calcular_fitness(hijo, piezas_requeridas_df)
                 valores_fitness_hijos.append(fitness)
+            
+            # Callback: Evaluación completa
+            if progress_callback:
+                mejor_fitness_actual = max(valores_fitness_hijos) if valores_fitness_hijos else 0.0
+                progress_callback(
+                    generacion, config_ga['max_generaciones'],
+                    best_fitness=mejor_fitness_actual,
+                    operation='evaluation'
+                )
             
             # Paso 3.5: Aplicar elitismo y reemplazo generacional
             nueva_poblacion, nuevos_valores_fitness = aplicar_elitismo_y_reemplazo(
@@ -178,6 +336,16 @@ def ejecutar_algoritmo_genetico(
             # Registrar estadísticas de la generación
             tiempo_generacion = time.time() - tiempo_inicio_generacion
             registro.registrar_generacion(generacion, poblacion, valores_fitness, tiempo_generacion)
+            
+            # Llamar al callback de progreso si fue proporcionado
+            if progress_callback is not None:
+                mejor_fitness_actual = max(valores_fitness) if valores_fitness else 0.0
+                try:
+                    progress_callback(generacion, config_ga['max_generaciones'], mejor_fitness_actual)
+                except Exception as e:
+                    # No fallar la evolución si el callback falla
+                    if config_ga.get('logging_habilitado', True):
+                        print(f"Error en progress_callback: {e}")
             
             generacion += 1
         
